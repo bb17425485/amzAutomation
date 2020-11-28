@@ -16,6 +16,7 @@ from db import MysqlPool
 from multiprocessing import Pool
 from logger import Logger
 from time import sleep
+import os,random
 
 desired_capabilities = DesiredCapabilities.CHROME  # 修改页面加载策略
 desired_capabilities["pageLoadStrategy"] = "none"  # 注释这两行会导致最后输出结果的延迟，即等待页面加载完成再输出
@@ -28,7 +29,7 @@ def getProData():
     # options.add_argument("--headless")
     options.add_argument("--disable-gpu")
     options.add_argument("log-level=3")
-    options.add_argument('blink-settings=imagesEnabled=false')
+    # options.add_argument('blink-settings=imagesEnabled=false')
     options.add_experimental_option('useAutomationExtension', False)
     options.add_experimental_option('excludeSwitches', ['enable-automation'])
     driver = webdriver.Chrome(options=options)
@@ -38,7 +39,7 @@ def getProData():
     for cookie in cookies:
         driver.add_cookie(cookie_dict=cookie)
     sleep(1)
-    driver.get("https://www.amazon.com/dp/B07D7WMM9H")
+    driver.get("https://www.amazon.com/dp/B08FR7TDNF")
     try:
         WebDriverWait(driver, 15).until(
             EC.visibility_of_element_located((By.ID, 'bylineInfo_feature_div')))
@@ -53,6 +54,18 @@ def getProData():
             'innerText').replace(" answered questions", "").replace(",", "").replace("+", "")
     except:
         qa = "0"
+    seller = ""
+    try:
+        follow_up_text = driver.find_element_by_xpath('//div[@class="olp-text-box"]/span').get_attribute('innerText')
+        follow_up_list = re.findall("\d", follow_up_text)
+        for fu in follow_up_list:
+            seller += fu
+    except:
+        pass
+    try:
+        seller_id = driver.find_element_by_id('merchantID').get_attribute("value")
+    except:
+        seller_id = None
     br_error_num = 0
     rank_type = 0
     big_rank_txt = ""
@@ -61,12 +74,14 @@ def getProData():
     mid_rank = 0
     small_rank_txt = ""
     small_rank = 0
-    while big_rank_txt != "":
+    while big_rank_txt == "":
         if rank_type == 1:
             try:
                 big_rank_txt = driver.find_element_by_xpath(
                     '//div[@id="detailBullets_feature_div"]/following-sibling::ul').get_attribute(
                     'innerText')
+                if big_rank_txt == "":
+                    br_error_num += 1
             except:
                 br_error_num += 1
                 sleep(1)
@@ -153,6 +168,7 @@ def getProData():
         put_date = None
     print("big_rank_txt="+big_rank_txt)
     print("mid_rank_txt=" + mid_rank_txt)
+    print("seller_id=",seller_id)
     sleep(1000)
 
 def getRank(driver,spanNum):
@@ -162,4 +178,24 @@ def getRank(driver,spanNum):
     return rank_txt
 
 if __name__ == "__main__":
-    getProData()
+    # getProData()
+    # a = {"a":1,"a2":2}
+    # b = {"b":1,"b2":2}
+    # c = []
+    # c.append(a)
+    # c.append(b)
+    # print(len(c))
+    # print(c)
+    # c.pop(0)
+    # print(len(c))
+    # print(c)
+
+    # a = '60.00 - 130.00'
+    # a = a[0:a.index("-")]
+    # print(a.strip())
+    proxy = os.listdir("D:\\proxy")
+    print(proxy[0])
+    # random.randint(0,2)
+
+
+

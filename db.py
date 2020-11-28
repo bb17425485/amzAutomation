@@ -26,9 +26,13 @@ class MysqlPool(object):
             # ping MySQL服务端，检查是否服务可用。# 如：0 = None = never, 1 = default = whenever it is requested, 2 = when a cursor is created, 4 = when a query is executed, 7 = always
             host='118.89.32.173',
             port=3306,
-            user='root',
             password='cuijie',
             database='cuij',
+            # host='127.0.0.1',
+            # port=3306,
+            # password='sjmoney',
+            # database='king_select',
+            user='root',
             charset='utf8'
         )
     def __new__(cls, *args, **kw):

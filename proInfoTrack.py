@@ -3,15 +3,17 @@
 # @Author : Cj
 # @File : amzAction.py
 # @Software : PyCharm
+from typing import List, Any
 
 from selenium import webdriver
-from datetime import datetime
-import traceback,re,urllib.request,json,os,pymysql
+import traceback,re,urllib.request,json,os,pymysql,zipfile,string
 from selenium.webdriver.support.wait import WebDriverWait
 from fake_useragent import UserAgent
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.desired_capabilities import DesiredCapabilities
+from selenium.common.exceptions import TimeoutException
+from apscheduler.schedulers.blocking import BlockingScheduler
 from db import MysqlPool
 from multiprocessing import Pool
 from logger import Logger
@@ -24,18 +26,19 @@ desired_capabilities["pageLoadStrategy"] = "none"  # 注释这两行会导致最
 
 def getProData(ip,product_list):
     all_log.logger.info("***start***ip=%s,product_list=%s***"%(ip,len(product_list)))
-    ua = UserAgent().chrome
+    ua = UserAgent(verify_ssl=False).chrome
     options = webdriver.ChromeOptions()
     options.add_argument("user-agent=" + ua)
     if ip:
         options.add_argument(('--proxy-server=http://' + ip))
     options.add_argument("--start-maximized")
-    # options.add_argument("--headless")
+    options.add_argument("--headless")
     options.add_argument("--disable-gpu")
     options.add_argument('blink-settings=imagesEnabled=false')
     options.add_experimental_option('useAutomationExtension', False)
-    options.add_experimental_option('excludeSwitches', ['enable-automation'])
+    options.add_experimental_option('excludeSwitches', ['enable-logging','enable-automation'])
     driver = webdriver.Chrome(options=options)
+    res_success_list = []
     try:
         driver.get("https://www.baidu.com")
         WebDriverWait(driver, 15).until(EC.visibility_of_element_located((By.ID, 'su')))
@@ -43,156 +46,256 @@ def getProData(ip,product_list):
         for cookie in cookies:
             driver.add_cookie(cookie_dict=cookie)
         sleep(1)
-        driver.get("https://www.amazon.com/s?k=" + product['keyword'] + "&ref=nb_sb_noss")
-        try:
-            WebDriverWait(driver, 20).until(
-                EC.visibility_of_element_located((By.XPATH, '//div[contains(@class,"s-main-slot")]')))
-        except:
-            try:
-                WebDriverWait(driver, 15).until(
-                    EC.visibility_of_element_located((By.XPATH, '//h4[contains(text(),"characters you see")]')))
-                error_log.logger.error(
-                    "***ip=%s,keyword=%s,asin=%s出现验证码,结束当前采集***" % (ip, product['keyword'],product['asin']))
-                driver.quit()
-                return False
-            except:
-                pass
-            try:
-                WebDriverWait(driver, 15).until(
-                    EC.visibility_of_element_located((By.XPATH, '//div[contains(@class,"s-main-slot")]')))
-            except:
-                error_log.logger.error(
-                    "***ip=%s,keyword=%s,asin=%s页面采集错误,结束当前采集***" % (ip, product['keyword'],product['asin']))
-                driver.quit()
-                return False
-        pro_num = 0
-        divs = driver.find_elements_by_xpath('//div[contains(@class,"s-main-slot")]/div')
-        for div in divs:
-            pro_asin = div.get_attribute('data-asin')
-            if pro_asin:
-                pro_num += 1
-                if product['asin'] == pro_asin:
+        for index,product in enumerate(product_list):
+            all_log.logger.info("---开始跟踪%s(%s)---"%(product['keyword'],product['asin']))
+            driver.get("https://www.amazon.com/s?k=" + product['keyword'] + "&ref=nb_sb_noss")
+            pro_num = 0
+            page_num = 1
+            break_flag = False
+            success_flag = True
+            while True:
+                try:
+                    WebDriverWait(driver, 15).until(
+                        EC.visibility_of_element_located((By.XPATH, '//ul[@class="a-pagination"]')))
+                except:
                     try:
-                        div.find_element_by_xpath('.//div[@class="a-row a-spacing-micro"]')
-                        continue
+                        WebDriverWait(driver, 10).until(
+                            EC.visibility_of_element_located((By.XPATH, '//h4[contains(text(),"characters you see")]')))
+                        error_log.logger.error(
+                            "***ip=%s,keyword=%s,asin=%s出现验证码,结束当前采集***" % (ip, product['keyword'], product['asin']))
+                        driver.quit()
+                        return res_success_list
                     except:
                         pass
                     try:
-                        price = div.find_element_by_xpath('.//span[@data-a-color="base"]/span').get_attribute("innerText").replace(
-                            "$", "")
+                        WebDriverWait(driver, 10).until(
+                            EC.visibility_of_element_located((By.XPATH, '//ul[@class="a-pagination"]')))
                     except:
-                        price = None
-                    try:
-                        star = div.find_element_by_xpath('.//div[@class="a-row a-size-small"]/span').get_attribute('aria-label').replace(" out of 5 stars","")
-                    except:
-                        star = None
-                    try:
-                        review = div.find_element_by_xpath('.//div[@class="a-row a-size-small"]/span[2]').get_attribute(
-                            'aria-label').replace(",", "")
-                    except:
-                        review = "0"
-                    try:
-                        div.find_element_by_xpath('.//span[contains(text(),"by Amazon")]')
-                        fba = "1"
-                    except:
-                        fba = "0"
-                    pro_url = div.find_element_by_xpath('.//h2/a').get_attribute("href")
-                    js = 'window.open("' + pro_url + '")'
-                    driver.execute_script(js)
-                    driver.switch_to.window(driver.window_handles[1])
-                    try:
-                        WebDriverWait(driver, 15).until(
-                            EC.visibility_of_element_located((By.ID, 'bylineInfo_feature_div')))
-                    except:
-                        try:
-                            WebDriverWait(driver, 5).until(
-                                EC.visibility_of_element_located((By.XPATH, '//span[contains(text(),"未连接到互联网")]')))
-                            error_log.logger.error("网络连接断开")
-                        except:
-                            pass
-                        error_log.logger.error("-----%s(%s)采集出错-----" % (product['keyword'], product['asin']))
-                        driver.close()
-                        driver.switch_to.window(driver.window_handles[0])
-                        return False
-                    try:
-                        brand = driver.find_element_by_xpath('//a[@id="bylineInfo"]').text.replace('Brand: ', '')
-                    except:
-                        brand = None
-                    try:
-                        qa = driver.find_element_by_xpath('//*[@id="askATFLink"]/span').get_attribute(
-                            'innerText').replace(" answered questions", "").replace(",", "").replace("+", "")
-                    except:
-                        qa = "0"
-                    big_rank_txt = ""
-                    br_error_num = 0
-                    while not big_rank_txt:
-                        try:
-                            big_rank_txt = getRank(driver, 1)
-                        except:
-                            br_error_num += 1
-                            sleep(1)
+                        error_log.logger.error(
+                            "***ip=%s,keyword=%s,asin=%s页面采集错误,结束当前采集***" % (ip, product['keyword'], product['asin']))
+                        driver.quit()
+                        return res_success_list
+                divs = driver.find_elements_by_xpath('//div[contains(@class,"s-main-slot")]/div')
+                for div in divs:
+                    pro_asin = div.get_attribute('data-asin')
+                    if pro_asin:
+                        pro_num += 1
+                        if pro_asin in str(product['asin']):
+                            try:
+                                #跳过广告
+                                div.find_element_by_xpath('.//div[@class="a-row a-spacing-micro"]')
+                                continue
+                            except:
+                                pass
+                            try:
+                                price = div.find_element_by_xpath('.//span[@data-a-color="base"]/span').get_attribute("innerText").replace(
+                                    "$", "")
+                            except:
+                                price = None
+                            try:
+                                star = div.find_element_by_xpath('.//div[@class="a-row a-size-small"]/span').get_attribute('aria-label').replace(" out of 5 stars","")
+                            except:
+                                star = None
+                            try:
+                                review = div.find_element_by_xpath('.//div[@class="a-row a-size-small"]/span[2]').get_attribute(
+                                    'aria-label').replace(",", "")
+                            except:
+                                review = "0"
+                            try:
+                                div.find_element_by_xpath('.//span[contains(text(),"by Amazon")]')
+                                fba = "1"
+                            except:
+                                fba = "0"
+                            pro_url = div.find_element_by_xpath('.//h2/a').get_attribute("href")
+                            js = 'window.open("' + pro_url + '")'
+                            driver.execute_script(js)
+                            driver.switch_to.window(driver.window_handles[1])
+                            try:
+                                WebDriverWait(driver, 15).until(
+                                    EC.visibility_of_element_located((By.ID, 'bylineInfo_feature_div')))
+                            except:
+                                try:
+                                    WebDriverWait(driver, 5).until(
+                                        EC.visibility_of_element_located((By.XPATH, '//span[contains(text(),"未连接到互联网")]')))
+                                    error_log.logger.error("网络连接断开")
+                                    return res_success_list
+                                except:
+                                    error_log.logger.error("-----%s(%s)采集出错-----" % (product['keyword'], product['asin']))
+                                    driver.close()
+                                    driver.switch_to.window(driver.window_handles[0])
+                                    break_flag = True
+                                    success_flag = False
+                                    break
+                            try:
+                                brand = driver.find_element_by_xpath('//a[@id="bylineInfo"]').text.replace('Brand: ', '')
+                            except:
+                                brand = None
+                            try:
+                                qa = driver.find_element_by_xpath('//*[@id="askATFLink"]/span').get_attribute(
+                                    'innerText').replace(" answered questions", "").replace(",", "").replace("+", "")
+                            except:
+                                qa = "0"
+                            seller = None
+                            try:
+                                follow_up_text = driver.find_element_by_xpath(
+                                    '//div[@class="olp-text-box"]/span').get_attribute('innerText')
+                                follow_up_list = re.findall("\d", follow_up_text)
+                                for fu in follow_up_list:
+                                    seller += fu
+                            except:
+                                pass
+                            br_error_num = 0
+                            rank_type = 0
                             big_rank_txt = ""
-                        if br_error_num == 5:
-                            print("未采集到大类排名%s次,退出" % br_error_num)
-                            return False
-                    big_rank_txt = re.sub("\(.*", "", big_rank_txt).strip()
-                    big_rank_list = re.findall("\d", big_rank_txt)
-                    big_rank = ""
-                    for br in big_rank_list:
-                        big_rank += br
-                    try:
-                        mid_rank_txt = getRank(driver, 2)
-                    except:
-                        mid_rank_txt = ""
-                    if mid_rank_txt:
-                        mid_rank_txt = re.sub("\(.*", "", mid_rank_txt).strip()
-                        mid_rank_list = re.findall("\d", mid_rank_txt)
-                        mid_rank = ""
-                        for mr in mid_rank_list:
-                            mid_rank += mr
-                    else:
-                        mid_rank = 0
-                    try:
-                        small_rank_txt = getRank(driver, 3)
-                    except:
-                        small_rank_txt = ""
-                    if small_rank_txt:
-                        small_rank_txt = re.sub("\(.*", "", small_rank_txt).strip()
-                        small_rank_list = re.findall("\d", small_rank_txt)
-                        small_rank = ""
-                        for sr in small_rank_list:
-                            small_rank += sr
-                    else:
-                        small_rank = 0
-                    rank = ""
-                    sql = "insert into tb_amz_track_data(pro_id,rank,price,fba,star,review,brand,qa,big_rank_txt,big_rank,mid_rank_txt,mid_rank,small_rank_txt,small_rank,add_time) " \
-                          "values(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now())"
-                    sql_param = [product['id'], rank, price, fba, star, review, brand, qa,big_rank_txt,
-                                 big_rank, mid_rank_txt, mid_rank, small_rank_txt, small_rank]
-                    try:
-                        mp = MysqlPool()
-                    except:
-                        try:
-                            mp = MysqlPool()
-                        except:
-                            error_log.logger.error("-----数据库连接失败-----")
-                            return False
-                    try:
-                        mp.insert(sql, sql_param)
-                        all_log.logger.info("***%s(%s)入库成功***" % (product['asin'], product['keyword']))
-                    except Exception:
-                        error_log.logger.error("入库异常%s"%sql_param)
-                        return False
-                    driver.close()
-                    driver.switch_to.window(driver.window_handles[0])
-        return True
+                            big_rank = 0
+                            mid_rank_txt = ""
+                            mid_rank = 0
+                            small_rank_txt = ""
+                            small_rank = 0
+                            for_break_flag = False
+                            while big_rank_txt == "":
+                                if rank_type == 1:
+                                    try:
+                                        big_rank_txt = driver.find_element_by_xpath(
+                                            '//div[@id="detailBullets_feature_div"]/following-sibling::ul').get_attribute(
+                                            'innerText')
+                                        if big_rank_txt == "":
+                                            br_error_num += 1
+                                    except:
+                                        br_error_num += 1
+                                        sleep(1)
+                                        big_rank_txt = ""
+                                else:
+                                    try:
+                                        big_rank_txt = getRank(driver, 1)
+                                    except:
+                                        try:
+                                            WebDriverWait(driver, 5).until(
+                                                EC.visibility_of_element_located(
+                                                    (By.ID, 'detailBulletsWrapper_feature_div')))
+                                            rank_type = 1
+                                            big_rank_txt = driver.find_element_by_xpath(
+                                                '//div[@id="detailBullets_feature_div"]/following-sibling::ul').get_attribute(
+                                                'innerText')
+                                        except:
+                                            br_error_num += 1
+                                            sleep(1)
+                                            big_rank_txt = ""
+                                if br_error_num == 5:
+                                    print("未采集到大类排名%s次,退出" % br_error_num)
+                                    for_break_flag = True
+                                    break_flag = True
+                                    success_flag = False
+                                    break
+                            if for_break_flag:
+                                break
+                            if big_rank_txt != "":
+                                if rank_type == 0:
+                                    big_rank_txt = re.sub("\(.*", "", big_rank_txt).strip()
+                                    big_rank_list = re.findall("\d", big_rank_txt)
+                                    big_rank = ""
+                                    for br in big_rank_list:
+                                        big_rank += br
+                                else:
+                                    for br_i, br in enumerate(big_rank_txt.split("#")):
+                                        rank_txt = "#" + br.strip()
+                                        if br_i == 1:
+                                            big_rank_txt = re.sub("\(.*", "", rank_txt).strip()
+                                            big_rank_list = re.findall("\d", big_rank_txt)
+                                            big_rank = ""
+                                            for br_1 in big_rank_list:
+                                                big_rank += br_1
+                                        elif br_i == 2:
+                                            mid_rank_txt = rank_txt
+                                            mid_rank_list = re.findall("\d", mid_rank_txt)
+                                            mid_rank = ""
+                                            for mr in mid_rank_list:
+                                                mid_rank += mr
+                                        elif br_i == 3:
+                                            small_rank_txt = rank_txt
+                                            small_rank_list = re.findall("\d", small_rank_txt)
+                                            small_rank = ""
+                                            for sr in small_rank_list:
+                                                small_rank += sr
+                            else:
+                                big_rank = 0
+                            if rank_type == 0:
+                                try:
+                                    mid_rank_txt = getRank(driver, 2)
+                                except:
+                                    mid_rank_txt = ""
+                                if mid_rank_txt != "":
+                                    mid_rank_txt = re.sub("\(.*", "", mid_rank_txt).strip()
+                                    mid_rank_list = re.findall("\d", mid_rank_txt)
+                                    mid_rank = ""
+                                    for mr in mid_rank_list:
+                                        mid_rank += mr
+                                else:
+                                    mid_rank = 0
+                                try:
+                                    small_rank_txt = getRank(driver, 3)
+                                except:
+                                    small_rank_txt = ""
+                                if small_rank_txt != "":
+                                    small_rank_txt = re.sub("\(.*", "", small_rank_txt).strip()
+                                    small_rank_list = re.findall("\d", small_rank_txt)
+                                    small_rank = ""
+                                    for sr in small_rank_list:
+                                        small_rank += sr
+                                else:
+                                    small_rank = 0
+                            rank = pro_num
+                            sql = "insert into tb_amz_track_data(pro_id,rank,page_num,price,fba,star,review,brand,qa,seller,big_rank_txt,big_rank,mid_rank_txt,mid_rank,small_rank_txt,small_rank,add_time) " \
+                                  "values(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now())"
+                            sql_param = [product['id'], rank, page_num,price, fba, star, review, brand, qa, seller,big_rank_txt,
+                                         big_rank, mid_rank_txt, mid_rank, small_rank_txt, small_rank]
+                            try:
+                                mp = MysqlPool()
+                            except:
+                                try:
+                                    mp = MysqlPool()
+                                except:
+                                    error_log.logger.error("-----数据库连接失败-----")
+                                    success_flag = False
+                                    break_flag = True
+                                    break
+                            try:
+                                mp.insert(sql, sql_param)
+                                all_log.logger.info("***%s(%s)入库成功***" % (product['asin'], product['keyword']))
+                                success_flag = False
+                            except Exception:
+                                error_log.logger.error("入库异常%s"%sql_param)
+                                success_flag = False
+                                break_flag = True
+                                break
+                            driver.close()
+                            driver.switch_to.window(driver.window_handles[0])
+                            res_success_list.append(product)
+                            break_flag = True
+                            break
+                if break_flag:
+                    break
+                if page_num == product['page_size']:
+                    break
+                try:
+                    WebDriverWait(driver, 5).until(
+                        EC.visibility_of_element_located(
+                            (By.XPATH, './/li[@class="a-last"]')))
+                    driver.find_element_by_class_name('a-last').click()
+                    page_num += 1
+                except TimeoutException:
+                    print("已到最后一页第%s页"%page_num)
+                    break
+            if success_flag:
+                error_log.logger.error("---%s在%s的%s页内未找到---"%(product['asin'],product['keyword'],page_num))
+                res_success_list.append(product)
     except Exception as e:
         traceback.print_exc()
         error_log.logger.error(e)
-        return False
     finally:
-        all_log.logger.info("---end---ip=%s,keyword=%s---" % (ip, product['keyword']))
+        all_log.logger.info("---end---ip=%s,product_list=%s---" % (ip, product_list))
         driver.quit()
+        return res_success_list
 
 def getRank(driver,spanNum):
     rank_txt = driver.find_element_by_xpath(
@@ -204,6 +307,11 @@ def insetData(sql,param):
     mp = MysqlPool()
     mp.insertMany(sql, param)
 
+def filter_str(desstr, restr=''):
+    # 过滤除中英文及数字及英文标点以外的其他字符
+    res = re.compile("[^\u4e00-\u9fa5^. !//_,$&%^*()<>+\"'?@#-|:~{}+|—^a-z^A-Z^0-9]")
+    return res.sub(restr, desstr)
+
 def removeTxtLine(txt,index):
     with open(txt) as fp_in:
         with open('temp.txt', 'w') as fp_out:
@@ -212,51 +320,31 @@ def removeTxtLine(txt,index):
     os.rename('temp.txt', txt)
     os.remove('test.bak')
 
-if __name__ == "__main__":
-    txt_name = "keyword_bak.txt"
-    pool_num = 1
-    keyword_list = []
-    with open(txt_name, 'r') as f:
-        for line in f.readlines():
-            keyword_list.append(line.strip())
-    num = len(keyword_list)
+def startTrack():
     url = "http://ip.ipjldl.com/index.php/api/entry?method=proxyServer.tiqu_api_url&packid=0&fa=0" \
           "&dt=0&groupid=0&fetch_key=&qty=1&time=1&port=1&format=json&ss=5&css=&dt=0&pro=&city=&usertype=6"
     i = 1
-    print('关键词总行数为%s行。' %num)
-    all_log.logger.info("#######亚马逊关键词爬取开始#######")
-    record = []
-    while num > pool_num:
+    find_mp = MysqlPool()
+    find_sql = "select * from tb_amz_track_pro where status=1"
+    product_list = find_mp.fetch_all(find_sql, None)
+    success_list = []
+    track_list = [x for x in product_list if x not in success_list]
+    all_log.logger.info("#######亚马逊关键词ASIN追踪开始#######")
+    while len(track_list) > 0 and i < 10:
         ip_data = urllib.request.urlopen(url).read()
         json_list = list(json.loads(ip_data)['data'])
-        param_list = []
-        # for j in range(pool_num):
-        for j,json_data in enumerate(json_list):
-            # json_data = json_list[j]
-            param = []
-            ip = "%s:%s"%(json_data['IP'],json_data['Port'])
-            param.append(ip)
-            param.append(keyword_list[j])
-            param_list.append(param)
-        try:
-            pool = Pool(len(json_list))
-            # pool = Pool(pool_num)
-            res_list = pool.starmap(getProData, param_list)
-            pool.close()
-            pool.join()
-        except:
-            continue
-        for index,res in enumerate(res_list):
-            removeTxtLine(txt_name, index)
-            if not res[0]:
-                with open("keyword_bak.txt", "a") as file:
-                    file.write(res[1]+"\n")
-        keyword_list = []
-        with open(txt_name, 'r') as f:
-            for line in f.readlines():
-                keyword_list.append(line.strip())
-        num = len(keyword_list)
-        all_log.logger.info("##########第%s轮运行结束##########"%i)
+        json_data = json_list[0]
+        ip = "%s:%s" % (json_data['IP'], json_data['Port'])
+        success_list += getProData(ip, track_list)
+        print("success_list=",len(success_list))
+        track_list = [x for x in product_list if x not in success_list]
+        all_log.logger.info("##########第%s轮追踪结束##########" % i)
         i += 1
-    # getProData(None,"child proof door knob covers")
+    all_log.logger.info("#######亚马逊关键词ASIN追踪结束#######")
+
+if __name__ == "__main__":
+    # scheduler = BlockingScheduler()
+    # scheduler.add_job(startTrack, 'cron', hour="0,3,6,9,12,15,18,21")
+    # scheduler.start()
+    startTrack()
 

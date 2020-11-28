@@ -29,7 +29,7 @@ def getProData(ip,keyword):
     options.add_argument("user-agent=" + ua)
     if ip:
         options.add_argument(('--proxy-server=http://' + ip))
-    # options.add_argument("--start-maximized")
+    options.add_argument("--start-maximized")
     options.add_argument("--headless")
     options.add_argument("--disable-gpu")
     options.add_argument("log-level=3")
@@ -37,7 +37,6 @@ def getProData(ip,keyword):
     options.add_experimental_option('useAutomationExtension', False)
     options.add_experimental_option('excludeSwitches', ['enable-logging','enable-automation'])
     driver = webdriver.Chrome(options=options)
-    # driver.set_window_size(800,600)
     try:
         driver.get("https://www.baidu.com")
         WebDriverWait(driver, 15).until(EC.visibility_of_element_located((By.ID, 'su')))
@@ -151,6 +150,10 @@ def getProData(ip,keyword):
                         'innerText').replace(" answered questions", "").replace(",", "").replace("+", "")
                 except:
                     qa = "0"
+                try:
+                    seller_id = driver.find_element_by_id('merchantID').get_attribute("value")
+                except:
+                    seller_id = None
                 br_error_num = 0
                 rank_type = 0
                 big_rank_txt = ""
@@ -159,12 +162,14 @@ def getProData(ip,keyword):
                 mid_rank = 0
                 small_rank_txt = ""
                 small_rank = 0
-                while big_rank_txt != "":
+                while big_rank_txt == "":
                     if rank_type == 1:
                         try:
                             big_rank_txt = driver.find_element_by_xpath(
                                 '//div[@id="detailBullets_feature_div"]/following-sibling::ul').get_attribute(
                                 'innerText')
+                            if big_rank_txt == "":
+                                br_error_num += 1
                         except:
                             br_error_num += 1
                             sleep(1)
@@ -250,9 +255,9 @@ def getProData(ip,keyword):
                         put_date = datetime.strptime(put_date, '%B %d, %Y').strftime("%Y-%m-%d")
                 except:
                     put_date = None
-                sql = "insert into tb_amz_pro(keyword,asin,img,sponsored,price,title,fba,star,review,brand,qa,big_rank_txt,big_rank,mid_rank_txt,mid_rank,small_rank_txt,small_rank,put_date,add_date) " \
-                      "values(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now())"
-                sql_param = [keyword, asin, img, sponsored, price, title, fba, star, review, brand, qa,
+                sql = "insert into tb_amz_pro(keyword,asin,img,sponsored,price,title,fba,star,review,brand,seller_id,qa,big_rank_txt,big_rank,mid_rank_txt,mid_rank,small_rank_txt,small_rank,put_date,add_date) " \
+                      "values(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now())"
+                sql_param = [keyword, asin, img, sponsored, price, title, fba, star, review, brand,seller_id, qa,
                              big_rank_txt, big_rank, mid_rank_txt, mid_rank, small_rank_txt, small_rank,
                              put_date]
                 try:
@@ -290,56 +295,6 @@ def getRank(driver,spanNum):
         'innerText')
     return rank_txt
 
-def bisector_list(tabulation: list, num: int):
-    """
-    将列表平均分成几份
-    :param tabulation: 列表
-    :param num: 份数
-    :return: 返回一个新的列表
-    """
-    new_list = []
-
-    '''列表长度大于等于份数'''
-    if len(tabulation) >= num:
-        '''remainder:列表长度除以份数，取余'''
-        remainder = len(tabulation) % num
-        if remainder == 0:
-            '''merchant:列表长度除以分数'''
-            merchant = int(len(tabulation) / num)
-            '''将列表平均拆分'''
-            for i in range(1, num + 1):
-                if i == 1:
-                    new_list.append(tabulation[:merchant])
-                else:
-                    new_list.append(tabulation[(i - 1) * merchant:i * merchant])
-            return new_list
-        else:
-            '''merchant：列表长度除以分数 取商'''
-            merchant = int(len(tabulation) // num)
-            '''remainder:列表长度除以份数，取余'''
-            remainder = int(len(tabulation) % num)
-            '''将列表平均拆分'''
-            for i in range(1, num + 1):
-                if i == 1:
-                    new_list.append(tabulation[:merchant])
-                else:
-                    new_list.append(tabulation[(i - 1) * merchant:i * merchant])
-                    '''将剩余数据的添加前面列表中'''
-                    if int(len(tabulation) - i * merchant) <= merchant:
-                        for j in tabulation[-remainder:]:
-                            new_list[tabulation[-remainder:].index(j)].append(j)
-            return new_list
-    else:
-        '''如果列表长度小于份数'''
-        for i in range(1, len(tabulation) + 1):
-            tabulation_subset = [tabulation[i - 1]]
-            new_list.append(tabulation_subset)
-        return new_list
-
-def insetData(sql,param):
-    mp = MysqlPool()
-    mp.insertMany(sql, param)
-
 def removeTxtLine(txt,index):
     with open(txt) as fp_in:
         with open('temp.txt', 'w') as fp_out:
@@ -357,7 +312,7 @@ if __name__ == "__main__":
             keyword_list.append(line.strip())
     num = len(keyword_list)
     url = "http://ip.ipjldl.com/index.php/api/entry?method=proxyServer.tiqu_api_url&packid=0&fa=0" \
-          "&dt=0&groupid=0&fetch_key=&qty=3&time=1&port=1&format=json&ss=5&css=&dt=0&pro=&city=&usertype=6"
+          "&dt=0&groupid=0&fetch_key=&qty=1&time=1&port=1&format=json&ss=5&css=&dt=0&pro=&city=&usertype=6"
     i = 1
     print('关键词总行数为%s行。' %num)
     all_log.logger.info("#######亚马逊关键词爬取开始#######")
