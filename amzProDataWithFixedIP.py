@@ -4,19 +4,23 @@
 # @File : amzAction.py
 # @Software : PyCharm
 
-from selenium import webdriver
+import os
+import random
+import re
+import traceback
 from datetime import datetime
-import traceback,re,urllib.request,json,os,random
-from selenium.webdriver.support.wait import WebDriverWait
+from time import sleep
+
 from fake_useragent import UserAgent
-from selenium.webdriver.support import expected_conditions as EC
+from pymysql import IntegrityError
+from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.desired_capabilities import DesiredCapabilities
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.wait import WebDriverWait
+
 from db import MysqlPool
-from multiprocessing import Pool
 from logger import Logger
-from time import sleep
-from pymysql import IntegrityError
 
 all_log = Logger('log/amz-pro-fixed-ip-all.log', level='debug')
 error_log = Logger('log/amz-pro-fixed-ip-error.log', level='error')
@@ -29,13 +33,14 @@ def getProData():
     data_list = mp.fetch_all(data_sql,None)
     for data in data_list:
         os.system("taskkill /f /im chrome.exe /t")
-        proxy = "C:\\py_file\\proxyauth\\%s"%os.listdir("C:\\py_file\\proxyauth")[random.randint(0,2)]
+        proxy = "C:\\py_file\\proxyauth\\%s"%os.listdir("C:\\py_file\\proxyauth")[random.randint(0,4)]
+        # proxy = 1
         all_log.logger.info("---ip=%s,keyword=%s开始采集---"%(proxy,data['keyword']))
         ua = UserAgent().chrome
         options = webdriver.ChromeOptions()
         options.add_extension(proxy)
         options.add_argument("user-agent=" + ua)
-        options.add_argument("--start-maximized")
+        # options.add_argument("--start-maximized")
         # options.add_argument("--headless")
         options.add_argument('blink-settings=imagesEnabled=false')
         options.add_argument("--disable-gpu")
@@ -43,9 +48,14 @@ def getProData():
         options.add_experimental_option('useAutomationExtension', False)
         options.add_experimental_option('excludeSwitches', ['enable-logging', 'enable-automation'])
         driver = webdriver.Chrome(options=options)
+        driver.set_window_size(600,600)
         cookies = [{'domain': 'www.amazon.com', 'expiry': 1632329890, 'httpOnly': False, 'name': 'csm-hit', 'path': '/', 'secure': False, 'value': 'tb:s-TW8A7SAQXE5512HEHN3F|1602089889292&t:1602089890223&adb:adblk_no'}, {'domain': '.amazon.com', 'expiry': 2082787202, 'httpOnly': False, 'name': 'lc-main', 'path': '/', 'secure': False, 'value': 'en_US'}, {'domain': '.amazon.com', 'expiry': 1633625853, 'httpOnly': False, 'name': 'session-token', 'path': '/', 'secure': True, 'value': '3QBwaC0p4MPUmPmkTggA/5KFuQV86y0YLrdo7ONa0Jj32bh7dV8URjqYgcRBuBz3ADk9Svq0h89qS1OuCpZy+uA1IYfO1TNpiYJaP6z6zHy2O/AO4FlwdTphm7+S2ahm1LBYNUTY+xDrwGQmgF8u6Dqx7nXqXJNSOkBCdVrQZ6a30LnhBpQgwinDvWxMFeKNsbK8LnDO+tARUPQiRm0va3zvb4gqiUAPSBe8RxIeunmQvASbwAR4Yc1WHotY6utU'}, {'domain': '.amazon.com', 'expiry': 1633625894, 'httpOnly': False, 'name': 'ubid-main', 'path': '/', 'secure': True, 'value': '134-4542133-6572654'}, {'domain': '.amazon.com', 'expiry': 1633625894, 'httpOnly': False, 'name': 'session-id-time', 'path': '/', 'secure': False, 'value': '2082787201l'}, {'domain': '.amazon.com', 'expiry': 1633625846, 'httpOnly': False, 'name': 'i18n-prefs', 'path': '/', 'secure': False, 'value': 'USD'}, {'domain': '.amazon.com', 'expiry': 1633625894, 'httpOnly': False, 'name': 'session-id', 'path': '/', 'secure': True, 'value': '132-8928912-9834042'}]
         driver.get("https://www.baidu.com")
-        WebDriverWait(driver, 10).until(EC.visibility_of_element_located((By.ID, 'su')))
+        try:
+            WebDriverWait(driver, 10).until(EC.visibility_of_element_located((By.ID, 'su')))
+        except:
+            error_log.logger.error("---%s打开百度失败---"%proxy)
+            continue
         for cookie in cookies:
             driver.add_cookie(cookie_dict=cookie)
         sleep(0.5)
@@ -77,7 +87,7 @@ def getProData():
             update_sql = "update amz123_keyword_left9 set status=1 where id=%s"
             for div in divs:
                 asin = div.get_attribute('data-asin')
-                if asin:
+                if asin and str(asin).startswith("B"):
                     try:
                         div.find_element_by_xpath('.//div[@class="a-row a-spacing-micro"]')
                         sponsored = "1"
@@ -90,9 +100,9 @@ def getProData():
                     except:
                         price = None
                     try:
-                        img = div.find_element_by_xpath('.//img').get_attribute('src')
+                        img1 = div.find_element_by_xpath('.//img').get_attribute('src')
                     except:
-                        img = None
+                        img1 = None
                     try:
                         title = div.find_element_by_xpath('.//h2/a/span').get_attribute("innerText")
                     except:
@@ -259,10 +269,49 @@ def getProData():
                                 put_date = datetime.strptime(put_date, '%B %d, %Y').strftime("%Y-%m-%d")
                         except:
                             put_date = None
-                        sql = "insert into tb_amz_pro_1129(keyword,asin,img,sponsored,price,title,fba,star,review,brand,store,qa,seller_id,seller_num," \
+                        if big_rank == '' or int(big_rank) == 0 or int(big_rank) > 15000:
+                            all_log.logger.info("---%s大类排名为%s,跳过---" % (asin, big_rank))
+                            driver.close()
+                            driver.switch_to.window(driver.window_handles[0])
+                            continue
+                        img2 = ''
+                        img3 = ''
+                        img2_num = 0
+                        img2_click_num = 0
+                        img3_num = 0
+                        img3_click_num = 0
+                        while img2 == '' and img2_click_num < 40 and img2_num < 5:
+                            sleep(0.5)
+                            try:
+                                driver.find_element_by_xpath(
+                                    '//div[@id="altImages"]/ul//li[@class="a-spacing-small template"]/following-sibling::li[2]').click()
+                            except:
+                                img2_click_num += 1
+                            try:
+                                WebDriverWait(driver, 5).until(
+                                    EC.visibility_of_element_located((By.XPATH, '//li[contains(@class,"itemNo1")]')))
+                                img2 = driver.find_element_by_xpath(
+                                    '//li[contains(@class,"itemNo1")]//img').get_attribute("src")
+                            except:
+                                img2_num += 1
+                        while img3 == '' and img3_click_num < 40 and img3_num < 5:
+                            sleep(0.5)
+                            try:
+                                driver.find_element_by_xpath(
+                                    '//div[@id="altImages"]/ul//li[@class="a-spacing-small template"]/following-sibling::li[3]').click()
+                            except:
+                                img3_click_num += 1
+                            try:
+                                WebDriverWait(driver, 5).until(
+                                    EC.visibility_of_element_located((By.XPATH, '//li[contains(@class,"itemNo2")]')))
+                                img3 = driver.find_element_by_xpath(
+                                    '//li[contains(@class,"itemNo2")]//img').get_attribute("src")
+                            except:
+                                img3_num += 1
+                        sql = "insert into tb_amz_pro_1129(keyword,asin,img1,img2,img3,sponsored,price,title,fba,star,review,brand,store,qa,seller_id,seller_num," \
                               "big_rank_txt,big_rank,mid_rank_txt,mid_rank,small_rank_txt,small_rank,put_date,add_date) " \
-                              "values(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now())"
-                        sql_param = [data['keyword'], asin, img, sponsored, price, title, fba, star, review, brand,store, qa,seller_id,
+                              "values(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now())"
+                        sql_param = [data['keyword'], asin, img1,img2,img3, sponsored, price, title, fba, star, review, brand,store, qa,seller_id,
                                      seller_num,big_rank_txt, big_rank, mid_rank_txt, mid_rank, small_rank_txt, small_rank,put_date]
                         try:
                             mp.insert(sql, sql_param)
@@ -271,11 +320,11 @@ def getProData():
                         except IntegrityError:
                             all_log.logger.info("-----%s(%s)已存在-----" % (asin, data['keyword']))
                             success_num += 1
-                        except:
-                            error_log.logger.error("-----%s(%s)入库失败-----" % (asin, data['keyword']))
+                        except Exception as e:
+                            error_log.logger.error("-----%s(%s)入库失败%s-----" % (asin, data['keyword'],e))
                     except:
                         traceback.print_exc()
-                        error_log.logger.error("-----%s---%s采集出错-----" % (data['keyword'], asin))
+                        error_log.logger.error("-----%s---%s采集出错-----" % (data['keyword'], proxy))
                     driver.close()
                     driver.switch_to.window(driver.window_handles[0])
             mp.update(update_sql,(data['id'],))
